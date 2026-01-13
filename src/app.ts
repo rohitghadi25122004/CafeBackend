@@ -26,3 +26,8 @@ app.register(cors, {
 app.register(healthRoutes);
 app.register(menuRoutes);
 app.register(orderRoutes);
+
+// Add root route for health check
+app.get('/', async (request, reply) => {
+  return { message: 'Cafe Ordering System API', status: 'running' };
+});
