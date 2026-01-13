@@ -8,7 +8,10 @@ export const app = Fastify({ logger: true });
 
 // CORS configuration - allow frontend origin and necessary headers
 app.register(cors, {
-  origin: true, // Allow all origins for development (including mobile LAN access)
+  origin:
+    process.env.NODE_ENV === "production"
+      ? (process.env.FRONTEND_URL?.split(",").map((s) => s.trim()).filter(Boolean) ?? [])
+      : true, // Allow all origins for development (including mobile LAN access)
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   allowedHeaders: [
     "Content-Type",
