@@ -119,6 +119,19 @@ export class DatabaseService {
     return data;
   }
 
+  static async deleteCategory(id: number) {
+    const { error } = await supabase
+      .from('MenuCategory')
+      .delete()
+      .eq('id', id);
+
+    if (error) {
+      console.error('Error deleting category:', error);
+      throw new Error(`Failed to delete category: ${error.message}`);
+    }
+    return { success: true };
+  }
+
   static async addMenuItem(categoryId: number, name: string, price: number, preparationTime: number = 10) {
     const { data, error } = await supabase
       .from('MenuItem')

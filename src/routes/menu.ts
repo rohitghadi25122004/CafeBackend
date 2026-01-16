@@ -37,6 +37,17 @@ export async function menuRoutes(fastify: FastifyInstance) {
     }
   });
 
+  fastify.delete("/admin/categories/:id", async (request: any, reply: any) => {
+    try {
+      const { id } = request.params as { id: string };
+      await DatabaseService.deleteCategory(Number(id));
+      return { success: true };
+    } catch (error) {
+      fastify.log.error(error);
+      return reply.status(500).send({ message: "Failed to delete category" });
+    }
+  });
+
   fastify.post("/admin/menu-items", async (request: any, reply: any) => {
     try {
       const { categoryId, name, price, preparationTime } = request.body as {
