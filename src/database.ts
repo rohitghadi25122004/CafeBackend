@@ -3,6 +3,15 @@ import crypto from 'crypto';
 
 export class DatabaseService {
   // Menu operations
+  static async getTables() {
+    const { data, error } = await supabase
+      .from('Table')
+      .select('*')
+      .order('tableNumber');
+    if (error) throw error;
+    return data || [];
+  }
+
   static async getMenu(tableNumber: number) {
     console.log(`Getting menu for table ${tableNumber}`);
     // Find or create table
@@ -45,7 +54,8 @@ export class DatabaseService {
           id,
           name,
           price,
-          isAvailable
+          isAvailable,
+          preparationTime
         )
       `)
       .eq('isActive', true)
@@ -59,7 +69,10 @@ export class DatabaseService {
     const categories = rawCategories?.map((cat: any) => ({
       id: cat.id,
       name: cat.name,
-      items: cat.MenuItem || []
+      items: cat.MenuItem?.map((item: any) => ({
+        ...item,
+        imageUrl: `https://dncyxqcxmmwzfujbpjtq.supabase.co/storage/v1/object/public/menu-images/${item.id}.jpg`
+      })) || []
     })) || [];
 
     console.log('Categories fetched:', categories.length, 'categories');
@@ -67,9 +80,110 @@ export class DatabaseService {
     return { tableNumber, categories };
   }
 
+  // Admin operations
+  static async updateMenuItem(id: number, updates: any) {
+    const { data, error } = await supabase
+      .from('MenuItem')
+      .update(updates)
+      .eq('id', id)
+      .select()
+      .single();
+    if (error) throw error;
+    return data;
+  }
+
+  static async deleteMenuItem(id: number) {
+    const { error } = await supabase
+      .from('MenuItem')
+      .delete()
+      .eq('id', id);
+
+    if (error) {
+      console.error('Error deleting menu item:', error);
+      throw new Error(`Failed to delete menu item: ${error.message}`);
+    }
+    return { success: true };
+  }
+
+  static async addCategory(name: string) {
+    const { data, error } = await supabase
+      .from('MenuCategory')
+      .insert({ name, isActive: true })
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Error adding category:', error);
+      throw new Error(`Failed to add category: ${error.message}`);
+    }
+    return data;
+  }
+
+  static async addMenuItem(categoryId: number, name: string, price: number, preparationTime: number = 10) {
+    const { data, error } = await supabase
+      .from('MenuItem')
+      .insert({
+        categoryId,
+        name,
+        price,
+        preparationTime,
+        isAvailable: true
+      })
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Error adding menu item:', error);
+      throw new Error(`Failed to add menu item: ${error.message}`);
+    }
+    return data;
+  }
+
+  static async endTableSession(tableNumber: number) {
+    // Find table
+    const { data: table, error: tableError } = await supabase
+      .from('Table')
+      .select('id')
+      .eq('tableNumber', tableNumber)
+      .single();
+
+    if (tableError || !table) {
+      throw new Error('Table not found');
+    }
+
+    // End active table session
+    const { error: tsError } = await supabase
+      .from('TableSession')
+      .update({ status: 'completed', updatedAt: new Date().toISOString() })
+      .eq('tableId', table.id)
+      .eq('status', 'active');
+
+    if (tsError) {
+      console.error('Error ending table session:', tsError);
+      throw new Error(`Failed to end table session: ${tsError.message}`);
+    }
+
+    // End all active guest sessions for this table
+    const { data: activeSessions } = await supabase
+      .from('TableSession')
+      .select('id')
+      .eq('tableId', table.id);
+
+    if (activeSessions && activeSessions.length > 0) {
+      const sessionIds = activeSessions.map(s => s.id);
+      await supabase
+        .from('GuestSession')
+        .update({ status: 'completed', updatedAt: new Date().toISOString() })
+        .in('tableSessionId', sessionIds)
+        .eq('status', 'active');
+    }
+
+    return { success: true };
+  }
+
   // Order operations
-  static async createOrder(tableNumber: number, items: Array<{ menuItemId: number; quantity: number }>) {
-    console.log(`Creating order for table ${tableNumber} with items:`, items);
+  static async createOrder(tableNumber: number, items: Array<{ menuItemId: number; quantity: number }>, guestToken?: string) {
+    console.log(`Creating order for table ${tableNumber} (Guest: ${guestToken}) with items:`, items);
     const now = new Date().toISOString();
 
     // 1. Find or create table
@@ -89,6 +203,7 @@ export class DatabaseService {
         .from('Table')
         .insert({
           tableNumber: tableNumber,
+          name: `Table ${tableNumber}`,
           qrCodeUrl: `https://cafe-ordering.com/qr/table${tableNumber}`,
           isActive: true
         })
@@ -137,14 +252,53 @@ export class DatabaseService {
     }
 
     // 3. Find or create active guest session
-    let { data: guestSession, error: gsError } = await supabase
-      .from('GuestSession')
-      .select('*')
-      .eq('tableSessionId', tableSession.id)
-      .eq('status', 'active')
-      .order('createdAt', { ascending: false })
-      .limit(1)
-      .maybeSingle();
+    // 3. Find or create active guest session
+    let guestSession;
+    let gsError;
+
+    if (guestToken) {
+      const { data, error } = await supabase
+        .from('GuestSession')
+        .select('*')
+        .eq('guestToken', guestToken)
+        .maybeSingle();
+
+      if (data) {
+        // If guest session exists but is for an old table session or is completed, update it
+        if (data.tableSessionId !== tableSession.id || data.status !== 'active') {
+          const { data: updated, error: updateError } = await supabase
+            .from('GuestSession')
+            .update({
+              tableSessionId: tableSession.id,
+              status: 'active',
+              updatedAt: now
+            })
+            .eq('id', data.id)
+            .select()
+            .single();
+
+          if (updateError) {
+            console.error('Error updating existing guest session:', updateError);
+          } else {
+            guestSession = updated;
+          }
+        } else {
+          guestSession = data;
+        }
+      }
+      gsError = error;
+    } else {
+      const { data, error } = await supabase
+        .from('GuestSession')
+        .select('*')
+        .eq('tableSessionId', tableSession.id)
+        .eq('status', 'active')
+        .order('createdAt', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      guestSession = data;
+      gsError = error;
+    }
 
     if (gsError) {
       console.error('Error finding guest session:', gsError);
@@ -157,7 +311,7 @@ export class DatabaseService {
           id: crypto.randomUUID(),
           tableSessionId: tableSession.id,
           status: 'active',
-          guestToken: `guest_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          guestToken: guestToken || `guest_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
           createdAt: now,
           updatedAt: now
         })
@@ -172,11 +326,11 @@ export class DatabaseService {
     }
 
     // 4. Validate menu items
-    const menuItemIds = items.map(item => item.menuItemId);
+    const uniqueMenuItemIds = [...new Set(items.map(item => item.menuItemId))];
     const { data: menuItems, error: miError } = await supabase
       .from('MenuItem')
       .select('*')
-      .in('id', menuItemIds)
+      .in('id', uniqueMenuItemIds)
       .eq('isAvailable', true);
 
     if (miError) {
@@ -184,11 +338,11 @@ export class DatabaseService {
       throw new Error(`Error validating menu items: ${miError.message}`);
     }
 
-    if (!menuItems || menuItems.length !== items.length) {
+    if (!menuItems || menuItems.length !== uniqueMenuItemIds.length) {
       throw new Error("Some menu items are not available or do not exist");
     }
 
-    // 5. Calculate preparation time
+    // 5. Calculate preparation time (keep it for DB but default it)
     const maxPreparationTime = menuItems.length > 0
       ? Math.max(...menuItems.map(item => item.preparationTime || 10))
       : 10;
@@ -307,7 +461,7 @@ export class DatabaseService {
     };
   }
 
-  static async getOrdersByTable(tableNumber: number) {
+  static async getOrdersByTable(tableNumber: number, guestToken?: string) {
     const { data: table, error: tableError } = await supabase
       .from('Table')
       .select('*')
@@ -319,29 +473,39 @@ export class DatabaseService {
       throw new Error("Table not found");
     }
 
-    const { data: tableSessions, error: sessionsError } = await supabase
-      .from('TableSession')
+    let query = supabase
+      .from('Order')
       .select(`
         *,
-        orders:Order (
+        guestSession:GuestSession!inner (
+          guestToken
+        ),
+        tableSession:TableSession!inner (
+          tableId,
+          status
+        ),
+        items:OrderItem (
           *,
-          items:OrderItem (
-            *,
-            menuItem:MenuItem (
-              name
-            )
+          menuItem:MenuItem (
+            name
           )
         )
       `)
-      .eq('tableId', table.id);
+      .eq('tableSession.tableId', table.id)
+      .eq('tableSession.status', 'active');
 
-    if (sessionsError) {
-      console.error('Error fetching table sessions:', sessionsError);
+    if (guestToken) {
+      query = query.eq('guestSession.guestToken', guestToken);
     }
 
-    const orders = tableSessions?.flatMap(session => session.orders || []) || [];
+    const { data: orders, error: ordersError } = await query;
 
-    return orders.map((order: any) => {
+    if (ordersError) {
+      console.error('Error fetching orders:', ordersError);
+      return [];
+    }
+
+    return (orders || []).map((order: any) => {
       const subtotal = order.items.reduce(
         (sum: number, item: any) => sum + Number(item.price) * item.quantity,
         0
@@ -356,7 +520,12 @@ export class DatabaseService {
         subtotal,
         tax,
         total,
-        itemCount: order.items.reduce((sum: number, item: any) => sum + item.quantity, 0)
+        itemCount: order.items.reduce((sum: number, item: any) => sum + item.quantity, 0),
+        items: order.items.map((item: any) => ({
+          name: item.menuItem.name,
+          quantity: item.quantity,
+          price: Number(item.price)
+        }))
       };
     }).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }

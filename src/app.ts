@@ -1,5 +1,6 @@
 import Fastify from "fastify";
 import cors from "@fastify/cors";
+import multipart from "@fastify/multipart";
 import { menuRoutes } from "./routes/menu.js";
 import { healthRoutes } from "./routes/health.js";
 import { orderRoutes } from "./routes/orders.js";
@@ -21,6 +22,12 @@ app.register(cors, {
     "X-Requested-With",
   ],
   credentials: true,
+});
+
+app.register(multipart, {
+  limits: {
+    fileSize: 5 * 1024 * 1024 // 5MB
+  }
 });
 
 app.register(healthRoutes);

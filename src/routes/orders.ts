@@ -2,12 +2,24 @@ import { FastifyInstance } from "fastify";
 import { DatabaseService } from '../database.js';
 
 export async function orderRoutes(fastify: FastifyInstance) {
-  // Create a new order
-  fastify.post("/orders", async (request, reply) => {
+  // Get all tables
+  fastify.get("/admin/tables", async (request: any, reply: any) => {
     try {
-      const { table, items } = request.body as {
+      const tables = await DatabaseService.getTables();
+      return tables;
+    } catch (error) {
+      fastify.log.error(error);
+      return reply.status(500).send({ message: "Failed to fetch tables" });
+    }
+  });
+
+  // Create a new order
+  fastify.post("/orders", async (request: any, reply: any) => {
+    try {
+      const { table, items, guestToken } = request.body as {
         table: string;
         items: Array<{ menuItemId: number; quantity: number }>;
+        guestToken?: string;
       };
 
       if (!table || !items || !Array.isArray(items) || items.length === 0) {
@@ -19,7 +31,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
         return reply.status(400).send({ message: "Invalid table number" });
       }
 
-      const result = await DatabaseService.createOrder(tableNumber, items);
+      const result = await DatabaseService.createOrder(tableNumber, items, guestToken);
       return reply.status(201).send(result);
     } catch (error) {
       fastify.log.error(error);
@@ -28,7 +40,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
   });
 
   // Get order by ID
-  fastify.get("/orders/:id", async (request, reply) => {
+  fastify.get("/orders/:id", async (request: any, reply: any) => {
     try {
       const { id } = request.params as { id: string };
       const order = await DatabaseService.getOrderById(id);
@@ -43,16 +55,17 @@ export async function orderRoutes(fastify: FastifyInstance) {
   });
 
   // Get orders by table number
-  fastify.get("/orders/table/:tableNumber", async (request, reply) => {
+  fastify.get("/orders/table/:tableNumber", async (request: any, reply: any) => {
     try {
       const { tableNumber } = request.params as { tableNumber: string };
+      const { guestToken } = request.query as { guestToken?: string };
       const tableNum = Number(tableNumber);
 
       if (Number.isNaN(tableNum)) {
         return reply.status(400).send({ message: "Invalid table number" });
       }
 
-      const orders = await DatabaseService.getOrdersByTable(tableNum);
+      const orders = await DatabaseService.getOrdersByTable(tableNum, guestToken);
       return orders;
     } catch (error) {
       if (error instanceof Error && error.message === "Table not found") {
@@ -64,7 +77,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
   });
 
   // Update order status
-  fastify.patch("/orders/:id/status", async (request, reply) => {
+  fastify.patch("/orders/:id/status", async (request: any, reply: any) => {
     try {
       const { id } = request.params as { id: string };
       const { status } = request.body as { status: string };
@@ -79,5 +92,20 @@ export async function orderRoutes(fastify: FastifyInstance) {
       return reply.status(500).send({ message: "Failed to update order status" });
     }
   });
-}
 
+  // End table session
+  fastify.post("/admin/tables/:tableNumber/end-session", async (request: any, reply: any) => {
+    try {
+      const { tableNumber } = request.params as { tableNumber: string };
+      const tableNum = Number(tableNumber);
+      if (Number.isNaN(tableNum)) {
+        return reply.status(400).send({ message: "Invalid table number" });
+      }
+      const result = await DatabaseService.endTableSession(tableNum);
+      return result;
+    } catch (error) {
+      fastify.log.error(error);
+      return reply.status(500).send({ message: "Failed to end session" });
+    }
+  });
+}
