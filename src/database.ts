@@ -546,6 +546,7 @@ export class DatabaseService {
   static async updateOrderStatus(orderId: string, status: string) {
     const validStatuses = [
       "pending",
+      "paid",
       "accepted",
       "preparing",
       "ready",
