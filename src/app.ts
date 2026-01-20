@@ -7,12 +7,19 @@ import { orderRoutes } from "./routes/orders.js";
 
 export const app = Fastify({ logger: true });
 
-// CORS configuration - allow frontend origin and necessary headers
+const defaultProdOrigins = [
+  "https://orderingeasy.netlify.app",
+  "https://cafebackend-x7ku.onrender.com",
+];
+
+const envOrigins =
+  process.env.FRONTEND_URL?.split(",").map((s) => s.trim()).filter(Boolean) ?? [];
+
+const allowedOrigins =
+  process.env.NODE_ENV === "production" ? [...new Set([...defaultProdOrigins, ...envOrigins])] : true;
+
 app.register(cors, {
-  origin:
-    process.env.NODE_ENV === "production"
-      ? (process.env.FRONTEND_URL?.split(",").map((s) => s.trim()).filter(Boolean) ?? [])
-      : true, // Allow all origins for development (including mobile LAN access)
+  origin: allowedOrigins,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   allowedHeaders: [
     "Content-Type",
